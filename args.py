@@ -256,6 +256,21 @@ def argument_parser():
         action="store_true",
         help="use available gpus instead of specified devices (useful when using managed clusters)",
     )
+
+    # ************************************************************
+    # Dataset subsampling
+    # ************************************************************
+    parser.add_argument(
+        "--data-fraction",
+        type=float,
+        default=0.01,
+        help=(
+            "Fraction of dataset to use for training and evaluation "
+            "(0 < f <= 1.0). Default 0.01 uses 1%% of data for fast iteration. "
+            "Set to 1.0 for full dataset runs."
+        ),
+    )
+
     return parser
 
 
@@ -278,6 +293,7 @@ def dataset_kwargs(parsed_args):
         "random_erase": parsed_args.random_erase,
         "color_jitter": parsed_args.color_jitter,
         "color_aug": parsed_args.color_aug,
+        "data_fraction": parsed_args.data_fraction,
     }
 
 

@@ -1,5 +1,8 @@
 # Copyright (c) EEEM071, University of Surrey
 
+import math
+import random
+from collections import defaultdict
 from torch.utils.data import DataLoader
 
 from .dataset_loader import ImageDataset
@@ -25,6 +28,7 @@ class BaseDataManager:
         color_jitter=False,  # randomly change the brightness, contrast and saturation
         color_aug=False,  # randomly alter the intensities of RGB channels
         num_instances=4,  # number of instances per identity (for RandomIdentitySampler)
+        data_fraction=1.0,  # fraction of dataset to use; 1.0 = full dataset
         **kwargs,
     ):
         self.use_gpu = use_gpu
@@ -41,6 +45,7 @@ class BaseDataManager:
         self.color_jitter = color_jitter
         self.color_aug = color_aug
         self.num_instances = num_instances
+        self.data_fraction = max(0.0, min(1.0, data_fraction))
 
         transform_train, transform_test = build_transforms(
             self.height,
@@ -100,6 +105,17 @@ class ImageDataManager(BaseDataManager):
             self._num_train_pids += dataset.num_train_pids
             self._num_train_cams += dataset.num_train_cams
 
+        # --- data_fraction: subsample training set while keeping RandomIdentitySampler valid
+        if self.data_fraction < 1.0:
+            pid_to_imgs = defaultdict(list)
+            for item in train:
+                pid_to_imgs[item[1]].append(item)
+            train = []
+            for pid, imgs in pid_to_imgs.items():
+                keep = max(self.num_instances, math.ceil(len(imgs) * self.data_fraction))
+                train.extend(random.sample(imgs, min(keep, len(imgs))))
+            print(f"  [data_fraction={self.data_fraction}] Train samples after subsample: {len(train)}")
+
         self.train_sampler = build_train_sampler(
             train,
             self.train_sampler,
@@ -127,8 +143,19 @@ class ImageDataManager(BaseDataManager):
         for name in self.target_names:
             dataset = init_imgreid_dataset(root=self.root, name=name)
 
+            query   = list(dataset.query)
+            gallery = list(dataset.gallery)
+
+            # --- data_fraction: subsample query/gallery for faster evaluation
+            if self.data_fraction < 1.0:
+                nq = max(1, math.ceil(len(query) * self.data_fraction))
+                ng = max(1, math.ceil(len(gallery) * self.data_fraction))
+                query   = random.sample(query,   nq)
+                gallery = random.sample(gallery, ng)
+                print(f"  [data_fraction={self.data_fraction}] {name} query={nq}, gallery={ng}")
+
             self.testloader_dict[name]["query"] = DataLoader(
-                ImageDataset(dataset.query, transform=self.transform_test),
+                ImageDataset(query, transform=self.transform_test),
                 batch_size=self.test_batch_size,
                 shuffle=False,
                 num_workers=self.workers,
@@ -137,7 +164,7 @@ class ImageDataManager(BaseDataManager):
             )
 
             self.testloader_dict[name]["gallery"] = DataLoader(
-                ImageDataset(dataset.gallery, transform=self.transform_test),
+                ImageDataset(gallery, transform=self.transform_test),
                 batch_size=self.test_batch_size,
                 shuffle=False,
                 num_workers=self.workers,
@@ -145,8 +172,8 @@ class ImageDataManager(BaseDataManager):
                 drop_last=False,
             )
 
-            self.testdataset_dict[name]["query"] = dataset.query
-            self.testdataset_dict[name]["gallery"] = dataset.gallery
+            self.testdataset_dict[name]["query"] = query
+            self.testdataset_dict[name]["gallery"] = gallery
 
         print("\n")
         print("  **************** Summary ****************")

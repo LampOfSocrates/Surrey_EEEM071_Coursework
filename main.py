@@ -1,6 +1,7 @@
 # Copyright (c) EEEM071, University of Surrey
 
 import datetime
+import math
 import os
 import os.path as osp
 import sys
@@ -11,6 +12,8 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
+from tqdm import tqdm
+
 from args import argument_parser, dataset_kwargs, optimizer_kwargs, lr_scheduler_kwargs
 from src import models
 from src.data_manager import ImageDataManager
@@ -19,6 +22,7 @@ from src.losses import CrossEntropyLoss, TripletLoss, DeepSupervision
 from src.lr_schedulers import init_lr_scheduler
 from src.optimizers import init_optimizer
 from src.utils.avgmeter import AverageMeter
+from src.utils.experiment_logger import ExperimentLogger
 from src.utils.generaltools import set_random_seed
 from src.utils.iotools import check_isfile
 from src.utils.loggers import Logger, RankLogger
@@ -57,6 +61,7 @@ def main():
     print("Experiment time:{}".format(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())))
     print("==========")
     print(f"==========\nArgs:{args}\n==========")
+    print(f"[data_fraction={args.data_fraction}] Using {args.data_fraction * 100:.1f}% of the dataset.")
 
     if use_gpu:
         print(f"Currently using GPU {args.gpu_devices}")
@@ -95,6 +100,8 @@ def main():
             args.resume, model, optimizer=optimizer
         )
 
+    logger = ExperimentLogger(args.save_dir, vars(args))
+
     if args.evaluate:
         print("Evaluate only")
 
@@ -102,76 +109,100 @@ def main():
             print(f"Evaluating {name} ...")
             queryloader = testloader_dict[name]["query"]
             galleryloader = testloader_dict[name]["gallery"]
-            distmat = test(
-                model, queryloader, galleryloader, use_gpu, return_distmat=True
-            )
+            result = test(model, queryloader, galleryloader, use_gpu)
+
+            is_best = logger.log_eval(0, {
+                "val_mAP":    result["mAP"],
+                "val_rank1":  result["rank1"],
+                "val_rank5":  result["rank5"],
+                "val_rank10": result["rank10"],
+                "val_rank20": result["rank20"],
+                "val_mINP":   result["mINP"],
+            })
 
             if args.visualize_ranks:
                 visualize_ranked_results(
-                    distmat,
+                    test(model, queryloader, galleryloader, use_gpu, return_distmat=True),
                     dm.return_testdataset_by_name(name),
                     save_dir=osp.join(args.save_dir, "ranked_results", name),
                     topk=20,
                 )
+
+        logger.generate_plots()
+        logger.write_summary()
+        logger.print_final_report(args.save_dir)
+        logger.close()
         return
 
     time_start = time.time()
     ranklogger = RankLogger(args.source_names, args.target_names)
     print("=> Start training")
-    """
-    if args.fixbase_epoch > 0:
-        print('Train {} for {} epochs while keeping other layers frozen'.format(args.open_layers, args.fixbase_epoch))
-        initial_optim_state = optimizer.state_dict()
 
-        for epoch in range(args.fixbase_epoch):
-            train(epoch, model, criterion_xent, criterion_htri, optimizer, trainloader, use_gpu, fixbase=True)
-
-        print('Done. All layers are open to train for {} epochs'.format(args.max_epoch))
-        optimizer.load_state_dict(initial_optim_state)
-    """
-    for epoch in range(args.start_epoch, args.max_epoch):
-        train(
-            epoch,
-            model,
-            criterion_xent,
-            criterion_htri,
-            optimizer,
-            trainloader,
-            use_gpu,
-        )
-
-        scheduler.step()
-
-        if (
-            (epoch + 1) > args.start_eval
-            and args.eval_freq > 0
-            and (epoch + 1) % args.eval_freq == 0
-            or (epoch + 1) == args.max_epoch
-        ):
-            print("=> Test")
-
-            for name in args.target_names:
-                print(f"Evaluating {name} ...")
-                queryloader = testloader_dict[name]["query"]
-                galleryloader = testloader_dict[name]["gallery"]
-                rank1 = test(model, queryloader, galleryloader, use_gpu)
-                ranklogger.write(name, epoch + 1, rank1)
-
-            save_checkpoint(
-                {
-                    "state_dict": model.state_dict(),
-                    "rank1": rank1,
-                    "epoch": epoch + 1,
-                    "arch": args.arch,
-                    "optimizer": optimizer.state_dict(),
-                },
-                args.save_dir,
+    try:
+        for epoch in range(args.start_epoch, args.max_epoch):
+            train_metrics = train(
+                epoch,
+                model,
+                criterion_xent,
+                criterion_htri,
+                optimizer,
+                trainloader,
+                use_gpu,
             )
+            logger.log_train_epoch(epoch + 1, train_metrics)
 
-    elapsed = round(time.time() - time_start)
-    elapsed = str(datetime.timedelta(seconds=elapsed))
-    print(f"Elapsed {elapsed}")
-    ranklogger.show_summary()
+            scheduler.step()
+
+            if (
+                (epoch + 1) > args.start_eval
+                and args.eval_freq > 0
+                and (epoch + 1) % args.eval_freq == 0
+                or (epoch + 1) == args.max_epoch
+            ):
+                print("=> Test")
+
+                for name in args.target_names:
+                    print(f"Evaluating {name} ...")
+                    queryloader = testloader_dict[name]["query"]
+                    galleryloader = testloader_dict[name]["gallery"]
+                    result = test(model, queryloader, galleryloader, use_gpu)
+                    ranklogger.write(name, epoch + 1, result["rank1"])
+
+                    is_best = logger.log_eval(epoch + 1, {
+                        "val_mAP":    result["mAP"],
+                        "val_rank1":  result["rank1"],
+                        "val_rank5":  result["rank5"],
+                        "val_rank10": result["rank10"],
+                        "val_rank20": result["rank20"],
+                        "val_mINP":   result["mINP"],
+                    })
+
+                ckpt_path = osp.join(args.save_dir, "checkpoint_ep{}.pth.tar".format(epoch + 1))
+                save_checkpoint(
+                    {
+                        "state_dict": model.state_dict(),
+                        "rank1": result["rank1"],
+                        "mAP":   result["mAP"],
+                        "epoch": epoch + 1,
+                        "arch":  args.arch,
+                        "optimizer": optimizer.state_dict(),
+                    },
+                    args.save_dir,
+                    is_best=is_best,
+                )
+                if is_best:
+                    logger.set_best_ckpt(osp.join(args.save_dir, "best_model.pth.tar"))
+
+    finally:
+        elapsed = round(time.time() - time_start)
+        elapsed_str = str(datetime.timedelta(seconds=elapsed))
+        print(f"Elapsed {elapsed_str}")
+        ranklogger.show_summary()
+
+        logger.generate_plots()
+        logger.write_summary()
+        logger.print_final_report(args.save_dir)
+        logger.close()
 
 
 def train(
@@ -182,13 +213,17 @@ def train(
     accs = AverageMeter()
     batch_time = AverageMeter()
     data_time = AverageMeter()
+    grad_norms = AverageMeter()
 
     model.train()
     for p in model.parameters():
         p.requires_grad = True  # open all layers
 
+    epoch_start = time.time()
     end = time.time()
-    for batch_idx, (imgs, pids, _, _) in enumerate(trainloader):
+
+    pbar = tqdm(trainloader, desc=f"Epoch {epoch + 1:>3} train", unit="batch", leave=False)
+    for batch_idx, (imgs, pids, _, _) in enumerate(pbar):
         data_time.update(time.time() - end)
 
         if use_gpu:
@@ -208,6 +243,21 @@ def train(
         loss = args.lambda_xent * xent_loss + args.lambda_htri * htri_loss
         optimizer.zero_grad()
         loss.backward()
+
+        # NaN/Inf guard
+        total_norm = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                if not torch.isfinite(param_norm):
+                    raise RuntimeError(
+                        f"Non-finite gradient at epoch {epoch + 1}, batch {batch_idx + 1}. "
+                        "Consider lowering the learning rate or checking data."
+                    )
+                total_norm += param_norm.item() ** 2
+        total_norm = math.sqrt(total_norm)
+        grad_norms.update(total_norm)
+
         optimizer.step()
 
         batch_time.update(time.time() - end)
@@ -215,6 +265,17 @@ def train(
         xent_losses.update(xent_loss.item(), pids.size(0))
         htri_losses.update(htri_loss.item(), pids.size(0))
         accs.update(accuracy(outputs, pids)[0])
+
+        # get current LR (first param group)
+        cur_lr = optimizer.param_groups[0]["lr"]
+
+        pbar.set_postfix(
+            loss=f"{(xent_losses.avg + htri_losses.avg):.3f}",
+            xent=f"{xent_losses.avg:.3f}",
+            tri=f"{htri_losses.avg:.3f}",
+            acc=f"{accs.avg:.1f}%",
+            lr=f"{cur_lr:.1e}",
+        )
 
         if (batch_idx + 1) % args.print_freq == 0:
             print(
@@ -237,6 +298,29 @@ def train(
 
         end = time.time()
 
+    pbar.close()
+    epoch_time = time.time() - epoch_start
+    total_samples = len(trainloader.dataset) if hasattr(trainloader, "dataset") else 0
+    sps = total_samples / epoch_time if epoch_time > 0 else 0.0
+
+    gpu_mem_mb = None
+    if use_gpu and torch.cuda.is_available():
+        gpu_mem_mb = torch.cuda.memory_allocated() / (1024 ** 2)
+
+    cur_lr = optimizer.param_groups[0]["lr"]
+
+    return {
+        "total_loss":         xent_losses.avg + htri_losses.avg,
+        "id_loss":            xent_losses.avg,
+        "triplet_loss":       htri_losses.avg,
+        "train_accuracy":     accs.avg,
+        "learning_rate":      cur_lr,
+        "grad_norm":          grad_norms.avg,
+        "epoch_time":         epoch_time,
+        "samples_per_second": sps,
+        "gpu_memory_mb":      gpu_mem_mb,
+    }
+
 
 def test(
     model,
@@ -252,7 +336,7 @@ def test(
 
     with torch.no_grad():
         qf, q_pids, q_camids = [], [], []
-        for batch_idx, (imgs, pids, camids, _) in enumerate(queryloader):
+        for imgs, pids, camids, _ in tqdm(queryloader, desc="Extracting query features", leave=False):
             if use_gpu:
                 imgs = imgs.cuda()
 
@@ -275,7 +359,7 @@ def test(
         )
 
         gf, g_pids, g_camids = [], [], []
-        for batch_idx, (imgs, pids, camids, _) in enumerate(galleryloader):
+        for imgs, pids, camids, _ in tqdm(galleryloader, desc="Extracting gallery features", leave=False):
             if use_gpu:
                 imgs = imgs.cuda()
 
@@ -309,20 +393,28 @@ def test(
     distmat.addmm_(qf, gf.t(), beta=1, alpha=-2)
     distmat = distmat.numpy()
 
+    if return_distmat:
+        return distmat
+
     print("Computing CMC and mAP")
-    # cmc, mAP = evaluate(distmat, q_pids, g_pids, q_camids, g_camids, args.target_names)
-    cmc, mAP = evaluate(distmat, q_pids, g_pids, q_camids, g_camids)
+    cmc, mAP, mINP = evaluate(distmat, q_pids, g_pids, q_camids, g_camids)
 
     print("Results ----------")
     print(f"mAP: {mAP:.1%}")
     print("CMC curve")
     for r in ranks:
         print("Rank-{:<3}: {:.1%}".format(r, cmc[r - 1]))
+    print(f"mINP: {mINP:.1%}")
     print("------------------")
 
-    if return_distmat:
-        return distmat
-    return cmc[0]
+    return {
+        "rank1":  cmc[0],
+        "rank5":  cmc[4] if len(cmc) > 4 else None,
+        "rank10": cmc[9] if len(cmc) > 9 else None,
+        "rank20": cmc[19] if len(cmc) > 19 else None,
+        "mAP":    mAP,
+        "mINP":   mINP,
+    }
 
 
 if __name__ == "__main__":

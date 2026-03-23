@@ -20,6 +20,7 @@ def eval_vehicleid(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
     # compute cmc curve for each query
     all_cmc = []
     all_AP = []
+    all_INP = []
     num_valid_q = 0.0  # number of valid query
 
     for q_idx in range(num_q):
@@ -56,13 +57,21 @@ def eval_vehicleid(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
         AP = tmp_cmc.sum() / num_rel
         all_AP.append(AP)
 
+        # compute INP (Inverse Negative Penalty)
+        # INP(q) = num_positives / rank_of_hardest_positive
+        pos_indices = np.where(raw_cmc == 1)[0]
+        hardest_rank = pos_indices[-1] + 1  # 1-based rank
+        INP = num_rel / hardest_rank
+        all_INP.append(INP)
+
     assert num_valid_q > 0, "Error: all query identities do not appear in gallery"
 
     all_cmc = np.asarray(all_cmc).astype(np.float32)
     all_cmc = all_cmc.sum(0) / num_valid_q
     mAP = np.mean(all_AP)
+    mINP = np.mean(all_INP)
 
-    return all_cmc, mAP
+    return all_cmc, mAP, mINP
 
 
 def eval_veri(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
@@ -81,6 +90,7 @@ def eval_veri(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
     # compute cmc curve for each query
     all_cmc = []
     all_AP = []
+    all_INP = []
     num_valid_q = 0.0  # number of valid query
 
     for q_idx in range(num_q):
@@ -116,13 +126,21 @@ def eval_veri(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
         AP = tmp_cmc.sum() / num_rel
         all_AP.append(AP)
 
+        # compute INP (Inverse Negative Penalty)
+        # INP(q) = num_positives / rank_of_hardest_positive
+        pos_indices = np.where(raw_cmc == 1)[0]
+        hardest_rank = pos_indices[-1] + 1  # 1-based rank
+        INP = num_rel / hardest_rank
+        all_INP.append(INP)
+
     assert num_valid_q > 0, "Error: all query identities do not appear in gallery"
 
     all_cmc = np.asarray(all_cmc).astype(np.float32)
     all_cmc = all_cmc.sum(0) / num_valid_q
     mAP = np.mean(all_AP)
+    mINP = np.mean(all_INP)
 
-    return all_cmc, mAP
+    return all_cmc, mAP, mINP
 
 
 def evaluate(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=50):
