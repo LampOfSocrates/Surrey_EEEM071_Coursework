@@ -99,7 +99,6 @@ jupyter nbconvert \
     --execute \
     --ExecutePreprocessor.timeout=3600 \
     --ExecutePreprocessor.kernel_name=python3 \
-    --inplace=False \
     --output "$NB_OUT_PY" \
     "$PATCHED_NB"
 
