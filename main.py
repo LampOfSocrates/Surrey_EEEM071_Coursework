@@ -83,8 +83,10 @@ def run(args, redirect_stdout=True):
         warnings.warn("Currently using CPU, however, GPU is highly recommended")
 
     print("Initializing image data manager")
+    _t0 = time.time()
     dm = ImageDataManager(use_gpu, **dataset_kwargs(args))
     trainloader, testloader_dict = dm.return_dataloaders()
+    print(f"[timing] Data manager ready in {time.time()-_t0:.1f}s")
 
     print(f"Initializing model: {args.arch}")
     model = models.init_model(
@@ -350,6 +352,7 @@ def test(
     model.eval()
 
     with torch.no_grad():
+        _t_feat = time.time()
         qf, q_pids, q_camids = [], [], []
         for imgs, pids, camids, _ in tqdm(queryloader, desc="Extracting query features", leave=False):
             if use_gpu:
@@ -368,11 +371,12 @@ def test(
         q_camids = np.asarray(q_camids)
 
         print(
-            "Extracted features for query set, obtained {}-by-{} matrix".format(
-                qf.size(0), qf.size(1)
+            "Extracted features for query set, obtained {}-by-{} matrix  [{:.1f}s]".format(
+                qf.size(0), qf.size(1), time.time() - _t_feat
             )
         )
 
+        _t_gal = time.time()
         gf, g_pids, g_camids = [], [], []
         for imgs, pids, camids, _ in tqdm(galleryloader, desc="Extracting gallery features", leave=False):
             if use_gpu:
@@ -391,14 +395,15 @@ def test(
         g_camids = np.asarray(g_camids)
 
         print(
-            "Extracted features for gallery set, obtained {}-by-{} matrix".format(
-                gf.size(0), gf.size(1)
+            "Extracted features for gallery set, obtained {}-by-{} matrix  [{:.1f}s]".format(
+                gf.size(0), gf.size(1), time.time() - _t_gal
             )
         )
 
     test_batch_size = args.test_batch_size if args is not None else "?"
     print(f"=> BatchTime(s)/BatchSize(img): {batch_time.avg:.3f}/{test_batch_size}")
 
+    _t_dist = time.time()
     m, n = qf.size(0), gf.size(0)
     distmat = (
         torch.pow(qf, 2).sum(dim=1, keepdim=True).expand(m, n)
@@ -406,12 +411,15 @@ def test(
     )
     distmat.addmm_(qf, gf.t(), beta=1, alpha=-2)
     distmat = distmat.numpy()
+    print(f"[timing] Distance matrix ({m}x{n}) computed in {time.time()-_t_dist:.2f}s")
 
     if return_distmat:
         return distmat
 
+    _t_eval = time.time()
     print("Computing CMC and mAP")
     cmc, mAP, mINP = evaluate(distmat, q_pids, g_pids, q_camids, g_camids)
+    print(f"[timing] CMC/mAP evaluation done in {time.time()-_t_eval:.2f}s")
 
     print("Results ----------")
     print(f"mAP: {mAP:.1%}")
