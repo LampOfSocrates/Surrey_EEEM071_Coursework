@@ -36,22 +36,26 @@ from src.utils.torchtools import (
 from src.utils.visualtools import visualize_ranked_results
 import uuid
 
-# global variables
-parser = argument_parser()
-args = parser.parse_args()
+def run(args, redirect_stdout=True):
+    """
+    Main entry point for a single training / evaluation run.
 
-
-def main():
-    global args
-
+    Parameters
+    ----------
+    args            : parsed argparse Namespace
+    redirect_stdout : when True (CLI default), redirects stdout to a log file.
+                      Set to False when calling from a Jupyter notebook so that
+                      output appears in the cell rather than being written to disk.
+    """
     set_random_seed(args.seed)
     if not args.use_avai_gpus:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_devices
     use_gpu = torch.cuda.is_available()
     if args.use_cpu:
         use_gpu = False
-    log_name = "log_test.txt" if args.evaluate else "log_train.txt"
-    sys.stdout = Logger(osp.join(args.save_dir, log_name))
+    if redirect_stdout:
+        log_name = "log_test.txt" if args.evaluate else "log_train.txt"
+        sys.stdout = Logger(osp.join(args.save_dir, log_name))
     print("==========")
     student_id = os.environ.get('STUDENT_ID', '<your id>')
     student_name = os.environ.get('STUDENT_NAME', '<your name>')
@@ -109,7 +113,7 @@ def main():
             print(f"Evaluating {name} ...")
             queryloader = testloader_dict[name]["query"]
             galleryloader = testloader_dict[name]["gallery"]
-            result = test(model, queryloader, galleryloader, use_gpu)
+            result = test(model, queryloader, galleryloader, use_gpu, args=args)
 
             is_best = logger.log_eval(0, {
                 "val_mAP":    result["mAP"],
@@ -122,7 +126,7 @@ def main():
 
             if args.visualize_ranks:
                 visualize_ranked_results(
-                    test(model, queryloader, galleryloader, use_gpu, return_distmat=True),
+                    test(model, queryloader, galleryloader, use_gpu, return_distmat=True, args=args),
                     dm.return_testdataset_by_name(name),
                     save_dir=osp.join(args.save_dir, "ranked_results", name),
                     topk=20,
@@ -148,6 +152,7 @@ def main():
                 optimizer,
                 trainloader,
                 use_gpu,
+                args,
             )
             logger.log_train_epoch(epoch + 1, train_metrics)
 
@@ -165,7 +170,7 @@ def main():
                     print(f"Evaluating {name} ...")
                     queryloader = testloader_dict[name]["query"]
                     galleryloader = testloader_dict[name]["gallery"]
-                    result = test(model, queryloader, galleryloader, use_gpu)
+                    result = test(model, queryloader, galleryloader, use_gpu, args=args)
                     ranklogger.write(name, epoch + 1, result["rank1"])
 
                     is_best = logger.log_eval(epoch + 1, {
@@ -206,7 +211,7 @@ def main():
 
 
 def train(
-    epoch, model, criterion_xent, criterion_htri, optimizer, trainloader, use_gpu
+    epoch, model, criterion_xent, criterion_htri, optimizer, trainloader, use_gpu, args
 ):
     xent_losses = AverageMeter()
     htri_losses = AverageMeter()
@@ -329,6 +334,7 @@ def test(
     use_gpu,
     ranks=[1, 5, 10, 20],
     return_distmat=False,
+    args=None,
 ):
     batch_time = AverageMeter()
 
@@ -381,9 +387,8 @@ def test(
             )
         )
 
-    print(
-        f"=> BatchTime(s)/BatchSize(img): {batch_time.avg:.3f}/{args.test_batch_size}"
-    )
+    test_batch_size = args.test_batch_size if args is not None else "?"
+    print(f"=> BatchTime(s)/BatchSize(img): {batch_time.avg:.3f}/{test_batch_size}")
 
     m, n = qf.size(0), gf.size(0)
     distmat = (
@@ -415,6 +420,13 @@ def test(
         "mAP":    mAP,
         "mINP":   mINP,
     }
+
+
+def main():
+    """CLI entry point — parses argv and calls run()."""
+    parser = argument_parser()
+    args = parser.parse_args()
+    run(args, redirect_stdout=True)
 
 
 if __name__ == "__main__":

@@ -82,13 +82,7 @@ def plot_training_curves(epoch_summaries: list, cfg: dict, save_dir: str) -> str
     """Plot XEnt / Triplet / Total loss and accuracy per epoch. Returns saved path."""
     if not epoch_summaries:
         return None
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not available — skipping training curves plot")
-        return None
+    import matplotlib.pyplot as plt
 
     epochs = [s["epoch"] for s in epoch_summaries]
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
@@ -129,13 +123,7 @@ def plot_eval_metrics(cmc: dict, final_map: float | None, cfg: dict, save_dir: s
     """Plot CMC curve and evaluation bar chart. Returns saved path."""
     if not cmc and final_map is None:
         return None
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not available — skipping eval metrics plot")
-        return None
+    import matplotlib.pyplot as plt
 
     ranks  = sorted(cmc)
     values = [cmc[r] for r in ranks]
