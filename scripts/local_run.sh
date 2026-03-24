@@ -41,6 +41,16 @@ echo "======================================================================"
 
 cd "$REPO_DIR"
 
+# On Windows (Git Bash), Python receives mangled Unix paths (/d/foo -> \d\foo).
+# Convert REPO_DIR to a Windows-native path when running under Windows Python.
+if python -c "import sys; sys.exit(0 if sys.platform=='win32' else 1)" 2>/dev/null; then
+    REPO_DIR_PY="$(cd "$REPO_DIR" && pwd -W)"   # e.g. D:/S/Code/...
+else
+    REPO_DIR_PY="$REPO_DIR"
+fi
+NB_FILE_PY="$REPO_DIR_PY/EEEM071_CourseWork_ipynb.ipynb"
+NB_OUT_PY="$REPO_DIR_PY/EEEM071_CourseWork_ipynb.executed.ipynb"
+
 # ── Dependency check ──────────────────────────────────────────────────────────
 echo ""
 echo "[1/4] Checking dependencies..."
@@ -54,9 +64,10 @@ echo "  OK"
 echo ""
 echo "[2/4] Preparing notebook parameters (mode=$RUN_MODE, data_root=$DATA_ROOT)..."
 python - <<PYEOF
-import json, pathlib
+import json, pathlib, tempfile, os
 
-nb = json.loads(pathlib.Path("$NB_FILE").read_text(encoding="utf-8"))
+nb_path = pathlib.Path("$NB_FILE_PY")
+nb = json.loads(nb_path.read_text(encoding="utf-8"))
 
 patched = False
 for cell in nb["cells"]:
@@ -70,11 +81,11 @@ for cell in nb["cells"]:
 if not patched:
     print("WARNING: could not find run_mode cell to patch")
 
-pathlib.Path("/tmp/nb_patched.ipynb").write_text(
-    json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8"
-)
-print("  Notebook patched -> /tmp/nb_patched.ipynb")
+out_path = pathlib.Path(tempfile.gettempdir()) / "nb_patched.ipynb"
+out_path.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+print(f"  Notebook patched -> {out_path}")
 PYEOF
+PATCHED_NB="$(python -c "import tempfile, pathlib; print(pathlib.Path(tempfile.gettempdir()) / 'nb_patched.ipynb')")"
 
 # ── Execute ───────────────────────────────────────────────────────────────────
 echo ""
@@ -89,16 +100,16 @@ jupyter nbconvert \
     --ExecutePreprocessor.timeout=3600 \
     --ExecutePreprocessor.kernel_name=python3 \
     --inplace=False \
-    --output "$NB_OUT" \
-    /tmp/nb_patched.ipynb
+    --output "$NB_OUT_PY" \
+    "$PATCHED_NB"
 
 echo ""
-echo "  Execution complete -> $NB_OUT"
+echo "  Execution complete -> $NB_OUT_PY"
 
 # ── Export HTML ───────────────────────────────────────────────────────────────
 echo ""
 echo "[4/4] Exporting to HTML..."
-jupyter nbconvert --to html "$NB_OUT" --output "$HTML_OUT"
+jupyter nbconvert --to html "$NB_OUT_PY" --output "$HTML_OUT"
 echo "  HTML report -> $HTML_OUT"
 
 # ── Commit outputs to git ─────────────────────────────────────────────────────
