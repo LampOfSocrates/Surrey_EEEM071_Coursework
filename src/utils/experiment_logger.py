@@ -23,6 +23,22 @@ import math
 import time
 from pathlib import Path
 
+
+class _SafeEncoder(json.JSONEncoder):
+    """Converts numpy scalars / arrays to native Python types for JSON serialisation."""
+    def default(self, obj):
+        try:
+            import numpy as np
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+        except ImportError:
+            pass
+        return super().default(obj)
+
 # ---------------------------------------------------------------------------
 # Metric glossary — shown in all final reports and comparison summaries
 # ---------------------------------------------------------------------------
@@ -302,12 +318,12 @@ class ExperimentLogger:
         }
         sp = self.save_dir / "summary.json"
         with open(sp, "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2)
+            json.dump(summary, f, indent=2, cls=_SafeEncoder)
         print(f"[Logger] Summary  -> {sp}")
 
         rp = self.save_dir / "retrieval_metrics.json"
         with open(rp, "w", encoding="utf-8") as f:
-            json.dump(self._last_eval, f, indent=2)
+            json.dump(self._last_eval, f, indent=2, cls=_SafeEncoder)
         print(f"[Logger] Retrieval-> {rp}")
 
     def print_final_report(self, experiment_name: str = ""):
