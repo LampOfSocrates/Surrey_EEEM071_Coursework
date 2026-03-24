@@ -2,37 +2,35 @@
 # =============================================================================
 # local_run.sh  —  Run EEEM071_CourseWork_ipynb.ipynb locally
 #
-# Usage:
-#   bash scripts/local_run.sh                         # default: single run
-#   bash scripts/local_run.sh --mode lr_sweep
-#   bash scripts/local_run.sh --mode all_experiments
-#   bash scripts/local_run.sh --mode compare
-#   bash scripts/local_run.sh --mode single --data-root /path/to/VeRi
-#
-# Requirements:
-#   pip install jupyter nbconvert torch torchvision tqdm matplotlib pandas
-#   (or: pip install -r ../requirements.txt)
+# EDIT THE TWO SECTIONS BELOW to choose your run mode and data path,
+# then run:   bash scripts/local_run.sh
 # =============================================================================
 
 set -euo pipefail
 
-# ── Defaults ──────────────────────────────────────────────────────────────────
+# =============================================================================
+# ── SECTION 1: Choose run mode (uncomment exactly one) ───────────────────────
+# =============================================================================
+RUN_MODE="single"           # train/eval one experiment with parameters below
+# RUN_MODE="lr_sweep"       # MobileNetV3-Small LR sweep (5 runs)
+# RUN_MODE="all_experiments"  # all 15 runs (5 models x 3 LRs)
+# RUN_MODE="compare"        # compare existing results only, no training
+
+# =============================================================================
+# ── SECTION 2: Paths ─────────────────────────────────────────────────────────
+# =============================================================================
+DATA_ROOT="../data/VeRi"    # path to the VeRi dataset root (local)
+# DATA_ROOT="/Volumes/data/VeRi"   # macOS external drive example
+# DATA_ROOT="/mnt/d/data/VeRi"     # WSL example
+
+# =============================================================================
+# ── internals — no need to edit below this line ───────────────────────────────
+# =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 NB_FILE="$REPO_DIR/EEEM071_CourseWork_ipynb.ipynb"
 NB_OUT="$REPO_DIR/EEEM071_CourseWork_ipynb.executed.ipynb"
 HTML_OUT="$REPO_DIR/EEEM071_CourseWork_ipynb.html"
-DATA_ROOT="${DATA_ROOT:-../data/VeRi}"
-RUN_MODE="single"
-
-# ── Argument parsing ──────────────────────────────────────────────────────────
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --mode)       RUN_MODE="$2";    shift 2 ;;
-        --data-root)  DATA_ROOT="$2";   shift 2 ;;
-        *)            echo "Unknown argument: $1"; exit 1 ;;
-    esac
-done
 
 echo "======================================================================"
 echo "  EEEM071 Local Notebook Runner"
@@ -52,47 +50,37 @@ python -c "import jupyter_client, nbconvert, torch, torchvision, tqdm, matplotli
 }
 echo "  OK"
 
-# ── Inject run_mode and data_root via env / notebook parameters ───────────────
+# ── Patch run_mode + data_root into the notebook ──────────────────────────────
 echo ""
-echo "[2/4] Preparing notebook parameters..."
+echo "[2/4] Preparing notebook parameters (mode=$RUN_MODE, data_root=$DATA_ROOT)..."
+python - <<PYEOF
+import json, pathlib
 
-# nbconvert injects parameters by prepending a parameters cell.
-# We pass them as a JSON string to --ExecutePreprocessor.extra_arguments.
-PARAMS_CELL=$(python - <<PYEOF
-import json
-params = {
-    "run_mode":   "$RUN_MODE",
-    "data_root":  "$DATA_ROOT",
-}
-# nbconvert --execute can't directly inject, so we patch the nb inline
-import copy, pathlib
 nb = json.loads(pathlib.Path("$NB_FILE").read_text(encoding="utf-8"))
 
-# Find the parameters cell (tagged or first code cell with run_mode)
 patched = False
 for cell in nb["cells"]:
     src = "".join(cell["source"])
     if "run_mode" in src and cell["cell_type"] == "code":
-        # Prepend overrides at the top of the cell
-        overrides = f'run_mode = "{params["run_mode"]}"\ndata_root = "{params["data_root"]}"\n'
+        overrides = 'run_mode = "$RUN_MODE"\ndata_root = "$DATA_ROOT"\n'
         cell["source"] = [overrides + src]
         patched = True
         break
 
 if not patched:
-    print("WARNING: could not find run_mode cell to patch", flush=True)
+    print("WARNING: could not find run_mode cell to patch")
 
-out = json.dumps(nb, indent=1, ensure_ascii=False)
-pathlib.Path("/tmp/nb_patched.ipynb").write_text(out, encoding="utf-8")
-print("patched", flush=True)
-PYEOF
+pathlib.Path("/tmp/nb_patched.ipynb").write_text(
+    json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8"
 )
-echo "  Parameters: run_mode=$RUN_MODE  data_root=$DATA_ROOT"
+print("  Notebook patched -> /tmp/nb_patched.ipynb")
+PYEOF
 
 # ── Execute ───────────────────────────────────────────────────────────────────
 echo ""
-echo "[3/4] Executing notebook (this may take a while)..."
-echo "      Output: $NB_OUT"
+echo "[3/4] Executing notebook..."
+echo "      Output : $NB_OUT"
+echo "      Timeout: 3600s (1 hour)"
 echo ""
 
 jupyter nbconvert \
@@ -105,18 +93,18 @@ jupyter nbconvert \
     /tmp/nb_patched.ipynb
 
 echo ""
-echo "  Execution complete."
+echo "  Execution complete -> $NB_OUT"
 
 # ── Export HTML ───────────────────────────────────────────────────────────────
 echo ""
 echo "[4/4] Exporting to HTML..."
 jupyter nbconvert --to html "$NB_OUT" --output "$HTML_OUT"
-echo "  HTML report: $HTML_OUT"
+echo "  HTML report -> $HTML_OUT"
 
-# ── Commit HTML if inside a git repo ─────────────────────────────────────────
+# ── Commit outputs to git ─────────────────────────────────────────────────────
 if git -C "$REPO_DIR" rev-parse --git-dir &>/dev/null; then
     git -C "$REPO_DIR" add "$HTML_OUT" "$NB_OUT" 2>/dev/null || true
-    git -C "$REPO_DIR" commit -m "Local run: $RUN_MODE mode — HTML export" 2>/dev/null \
+    git -C "$REPO_DIR" commit -m "Local run: $RUN_MODE — HTML export" 2>/dev/null \
         && echo "  Committed to git." \
         || echo "  Nothing new to commit."
 fi
