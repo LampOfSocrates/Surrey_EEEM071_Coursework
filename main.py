@@ -4,6 +4,7 @@ import datetime
 import math
 import os
 import os.path as osp
+import re
 import sys
 import time
 import warnings
@@ -48,6 +49,14 @@ def run(args, redirect_stdout=True):
                       output appears in the cell rather than being written to disk.
     """
     set_random_seed(args.seed)
+
+    # Auto-append YYYYMMDD_HHMM timestamp subdirectory unless one is already present
+    _TS_RE = re.compile(r'\d{8}_\d{4}$')
+    if not _TS_RE.search(args.save_dir):
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+        args.save_dir = osp.join(args.save_dir, ts)
+    os.makedirs(args.save_dir, exist_ok=True)
+
     if not args.use_avai_gpus:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_devices
     use_gpu = torch.cuda.is_available()

@@ -22,8 +22,9 @@ BATCH_RE = re.compile(
     r".*Htri [\d.]+ \(([\d.]+)\)"
     r".*Acc [\d.]+ \(([\d.]+)\)"
 )
-MAP_RE  = re.compile(r"mAP: ([\d.]+)%")
-RANK_RE = re.compile(r"Rank-(\d+)\s*:\s*([\d.]+)%")
+MAP_RE     = re.compile(r"mAP: ([\d.]+)%")
+RANK_RE    = re.compile(r"Rank-(\d+)\s*:\s*([\d.]+)%")
+ELAPSED_RE = re.compile(r"Elapsed\s+(\d+:\d{2}:\d{2})")
 
 
 def parse_training_output(output_lines: list[str]):
@@ -36,10 +37,12 @@ def parse_training_output(output_lines: list[str]):
     epoch_summaries : list of dicts  {epoch, xent, htri, loss, acc}
     final_map       : float | None
     cmc             : dict  {rank_int: pct_float}
+    elapsed_seconds : float | None   (parsed from "Elapsed H:MM:SS" line)
     """
-    batch_stats = []
-    final_map   = None
-    cmc         = {}
+    batch_stats     = []
+    final_map       = None
+    cmc             = {}
+    elapsed_seconds = None
 
     for line in output_lines:
         m = BATCH_RE.search(line)
@@ -58,6 +61,11 @@ def parse_training_output(output_lines: list[str]):
         m = RANK_RE.search(line)
         if m:
             cmc[int(m.group(1))] = float(m.group(2))
+            continue
+        m = ELAPSED_RE.search(line)
+        if m:
+            h, mm, s = m.group(1).split(":")
+            elapsed_seconds = int(h) * 3600 + int(mm) * 60 + int(s)
 
     # Per-epoch summary: take running average from the last batch of each epoch
     epoch_groups = defaultdict(list)
@@ -75,7 +83,7 @@ def parse_training_output(output_lines: list[str]):
             "acc":   last["acc"],
         })
 
-    return batch_stats, epoch_summaries, final_map, cmc
+    return batch_stats, epoch_summaries, final_map, cmc, elapsed_seconds
 
 
 def plot_training_curves(epoch_summaries: list, cfg: dict, save_dir: str) -> str | None:
@@ -193,7 +201,9 @@ def render_metrics(output_lines: list[str], cfg: dict, elapsed: float = 0.0) -> 
     save_dir = cfg.get("save_dir", "logs/run")
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    batch_stats, epoch_summaries, final_map, cmc = parse_training_output(output_lines)
+    batch_stats, epoch_summaries, final_map, cmc, parsed_elapsed = parse_training_output(output_lines)
+    if elapsed == 0.0 and parsed_elapsed is not None:
+        elapsed = float(parsed_elapsed)
 
     print(f"Parsed {len(batch_stats)} batch log entries")
     if final_map is not None:
