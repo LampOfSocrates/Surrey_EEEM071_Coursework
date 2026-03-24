@@ -99,6 +99,7 @@ jupyter nbconvert \
     --execute \
     --ExecutePreprocessor.timeout=3600 \
     --ExecutePreprocessor.kernel_name=python3 \
+    --config="" \
     --output "$NB_OUT_PY" \
     "$PATCHED_NB"
 
@@ -108,7 +109,7 @@ echo "  Execution complete -> $NB_OUT_PY"
 # ── Export HTML ───────────────────────────────────────────────────────────────
 echo ""
 echo "[4/4] Exporting to HTML..."
-jupyter nbconvert --to html "$NB_OUT_PY" --output "$HTML_OUT"
+jupyter nbconvert --to html --config="" "$NB_OUT_PY" --output "$HTML_OUT"
 echo "  HTML report -> $HTML_OUT"
 
 # ── Commit outputs to git ─────────────────────────────────────────────────────
